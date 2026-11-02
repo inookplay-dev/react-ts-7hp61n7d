@@ -3173,10 +3173,10 @@ ${chatTranscript}
                     min="0"
                     max="10"
                     value={bookingForm.extraBedCount}
-                    onChange={(e) =>
+                   onChange={(e) =>
                       setBookingForm((prev) => ({
                         ...prev,
-                        extraBedCount: e.target.value,
+                        extraBedCount: Number(e.target.value) || 0,
                       }))
                     }
                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold"
