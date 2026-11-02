@@ -49,13 +49,20 @@ import {
 } from 'lucide-react';
 
 import { db } from './firebase';
-import { collection, onSnapshot, doc, setDoc, addDoc } from 'firebase/firestore';
-
+import {
+  collection,
+  onSnapshot,
+  doc,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+} from 'firebase/firestore';
 
 // ==========================================
 // 1. มาตรฐานการคำนวณ EMVCo PromptPay QR Code (ประเทศไทย)
 // ==========================================
-function crc16ccitt(data) {
+function crc16ccitt(data: string) {
   let crc = 0xffff;
   for (let i = 0; i < data.length; i++) {
     crc ^= data.charCodeAt(i) << 8;
@@ -70,21 +77,19 @@ function crc16ccitt(data) {
   return crc.toString(16).toUpperCase().padStart(4, '0');
 }
 
-function formatTLV(id, value) {
+function formatTLV(id: string, value: string) {
   const len = value.length.toString().padStart(2, '0');
   return `${id}${len}${value}`;
 }
 
-function generatePromptPayPayload(target, amount) {
-  const cleanTarget = target.replace(/[^0-9]/g, '');
+function generatePromptPayPayload(target: string, amount?: number | string) {
+  const cleanTarget = (target || '').replace(/[^0-9]/g, '');
   if (!cleanTarget) return '';
 
   let targetSubTag = '';
   if (cleanTarget.length >= 13) {
-    // เลขบัตรประชาชน 13 หลัก
     targetSubTag = formatTLV('02', cleanTarget.substring(0, 13));
   } else {
-    // เบอร์โทรศัพท์ 10 หลัก -> แปลงเป็น 0066 + 9 หลักท้าย
     const phoneNoZero = cleanTarget.replace(/^0/, '');
     targetSubTag = formatTLV('01', `0066${phoneNoZero}`);
   }
@@ -96,30 +101,35 @@ function generatePromptPayPayload(target, amount) {
     amount !== undefined && amount !== null && Number(amount) > 0;
 
   let payload =
-    formatTLV('00', '01') + // Payload Format Indicator
-    formatTLV('01', hasAmount ? '12' : '11') + // 11 = Static, 12 = Dynamic (ระบุยอดเงิน)
+    formatTLV('00', '01') +
+    formatTLV('01', hasAmount ? '12' : '11') +
     tag29 +
-    formatTLV('53', '764') + // THB Currency
+    formatTLV('53', '764') +
     (hasAmount ? formatTLV('54', Number(amount).toFixed(2)) : '') +
-    formatTLV('58', 'TH') + // Country Code
-    '6304'; // CRC ID + Length
+    formatTLV('58', 'TH') +
+    '6304';
 
   const crc = crc16ccitt(payload);
   return payload + crc;
 }
 
 // ==========================================
-// 1.1 ระบบวาดใบยืนยันการจอง + QR Code ลงบน HTML5 Canvas (Save & Share เป็นรูปภาพ PNG)
-// รองรับการดึงภาพ QR แบบ CORS-safe พร้อมระบบสำรอง ताकिเซฟรูปและแชร์ลง LINE / Messenger ได้ 100%
+// 1.1 ระบบวาดใบยืนยันการจอง + QR Code ลงบน HTML5 Canvas
 // ==========================================
-function drawDeterministicMatrixFallback(ctx, x, y, size, payloadStr) {
+function drawDeterministicMatrixFallback(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  payloadStr: string
+) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(x, y, size, size);
   const cells = 25;
   const cellSize = size / cells;
   ctx.fillStyle = '#0f172a';
 
-  const drawFinder = (r0, c0) => {
+  const drawFinder = (r0: number, c0: number) => {
     for (let r = 0; r < 7; r++) {
       for (let c = 0; c < 7; c++) {
         if (
@@ -168,7 +178,12 @@ async function renderBookingSlipToCanvas({
   settings,
   bookingsList,
   getBookingFinancials,
-  mode = 'confirmation', // 'confirmation' | 'remaining' | 'combined'
+  mode = 'confirmation',
+}: {
+  settings: any;
+  bookingsList: any[];
+  getBookingFinancials: (b: any) => any;
+  mode?: string;
 }) {
   const canvas = document.createElement('canvas');
   const width = 760;
@@ -177,15 +192,14 @@ async function renderBookingSlipToCanvas({
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
 
-  // พื้นหลังหลัก
   const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
   bgGrad.addColorStop(0, '#ecfdf5');
   bgGrad.addColorStop(1, '#f8fafc');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // กรอบการ์ดสีขาวด้านใน
   const cardX = 32;
   const cardY = 32;
   const cardW = width - 64;
@@ -201,7 +215,6 @@ async function renderBookingSlipToCanvas({
   ctx.fill();
   ctx.restore();
 
-  // แถบ Header ด้านบนของการ์ด
   const headerGrad = ctx.createLinearGradient(
     cardX,
     cardY,
@@ -215,7 +228,6 @@ async function renderBookingSlipToCanvas({
   ctx.roundRect(cardX, cardY, cardW, 145, [32, 32, 0, 0]);
   ctx.fill();
 
-  // ข้อความบน Header
   ctx.fillStyle = '#a7f3d0';
   ctx.font = 'bold 18px sans-serif';
   const badgeTitle =
@@ -243,7 +255,6 @@ async function renderBookingSlipToCanvas({
     cardY + 124
   );
 
-  // ส่วนข้อมูลผู้เข้าพัก
   let curY = cardY + 185;
   ctx.fillStyle = '#f8fafc';
   ctx.strokeStyle = '#e2e8f0';
@@ -276,7 +287,6 @@ async function renderBookingSlipToCanvas({
   );
   ctx.textAlign = 'left';
 
-  // ส่วนรายการห้องพักและราคา
   curY += 176;
   ctx.fillStyle = '#0f172a';
   ctx.font = 'bold 20px sans-serif';
@@ -318,7 +328,7 @@ async function renderBookingSlipToCanvas({
       ctx.fillStyle = '#64748b';
       ctx.font = '16px sans-serif';
       ctx.fillText(
-        `   + เตียงเสริม ${b.extraBedCount} เตียง (฿${b.extraBedPrice}/คืน)`,
+        `    + เตียงเสริม ${b.extraBedCount} เตียง (฿${b.extraBedPrice}/คืน)`,
         cardX + 48,
         curY
       );
@@ -343,7 +353,6 @@ async function renderBookingSlipToCanvas({
     );
   }
 
-  // เส้นคั่นสรุปยอดเงิน
   curY += 26;
   ctx.strokeStyle = '#cbd5e1';
   ctx.setLineDash([6, 6]);
@@ -353,7 +362,6 @@ async function renderBookingSlipToCanvas({
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // กล่องสรุปยอดรวม
   curY += 20;
   ctx.fillStyle = '#0f172a';
   ctx.beginPath();
@@ -388,7 +396,6 @@ async function renderBookingSlipToCanvas({
   );
   ctx.textAlign = 'left';
 
-  // ส่วนแสดง PromptPay QR Code ด้านล่าง
   curY += 152;
   const qrAmount =
     mode === 'remaining' || mode === 'combined'
@@ -399,7 +406,6 @@ async function renderBookingSlipToCanvas({
 
   const payload = generatePromptPayPayload(settings.promptPayId, qrAmount);
 
-  // กล่อง QR
   ctx.fillStyle = '#f0fdf4';
   ctx.strokeStyle = '#86efac';
   ctx.lineWidth = 2;
@@ -408,7 +414,6 @@ async function renderBookingSlipToCanvas({
   ctx.fill();
   ctx.stroke();
 
-  // วาดรูป QR Code (โหลดผ่าน CORS anonymous หรือใช้ fallback)
   const qrBoxSize = 215;
   const qrX = cardX + 64;
   const qrY = curY + 35;
@@ -422,7 +427,7 @@ async function renderBookingSlipToCanvas({
     img.crossOrigin = 'anonymous';
     const timeout = setTimeout(() => {
       drawDeterministicMatrixFallback(ctx, qrX, qrY, qrBoxSize, payload);
-      resolve(null as any);
+      resolve(null);
     }, 2500);
 
     img.onload = () => {
@@ -430,17 +435,16 @@ async function renderBookingSlipToCanvas({
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(qrX - 6, qrY - 6, qrBoxSize + 12, qrBoxSize + 12);
       ctx.drawImage(img, qrX, qrY, qrBoxSize, qrBoxSize);
-      resolve(null as any);
+      resolve(null);
     };
     img.onerror = () => {
       clearTimeout(timeout);
       drawDeterministicMatrixFallback(ctx, qrX, qrY, qrBoxSize, payload);
-      resolve(null as any);
+      resolve(null);
     };
     img.src = qrUrl;
   });
 
-  // รายละเอียดข้าง QR Code
   const infoX = qrX + qrBoxSize + 32;
   ctx.fillStyle = '#113566';
   ctx.font = 'bold 22px sans-serif';
@@ -479,7 +483,6 @@ async function renderBookingSlipToCanvas({
     qrY + 214
   );
 
-  // Footer
   ctx.fillStyle = '#64748b';
   ctx.font = '15px sans-serif';
   ctx.textAlign = 'center';
@@ -494,8 +497,7 @@ async function renderBookingSlipToCanvas({
   return canvas;
 }
 
-// คอมโพเนนต์แสดงผล QR Code พร้อมระบบสำรอง (Canvas / SVG / API)
-const PromptPayQRView = ({ target, amount, accountName, subtitle }) => {
+const PromptPayQRView = ({ target, amount, accountName, subtitle }: any) => {
   const payload = useMemo(
     () => generatePromptPayPayload(target, amount),
     [target, amount]
@@ -517,7 +519,6 @@ const PromptPayQRView = ({ target, amount, accountName, subtitle }) => {
 
   return (
     <div className="bg-white rounded-3xl border-2 border-emerald-500/20 shadow-lg overflow-hidden max-w-xs mx-auto">
-      {/* Header มาตรฐาน Thai QR */}
       <div className="bg-[#113566] text-white px-4 py-3 text-center flex items-center justify-center gap-2">
         <QrCode className="w-5 h-5 text-emerald-400" />
         <span className="font-bold tracking-wide text-sm">
@@ -714,14 +715,13 @@ const INITIAL_SETTINGS = {
     'พูดจาสุภาพ เป็นกันเอง ลงท้ายด้วยค่ะ/ครับ พร้อมช่วยเหลือทั้งพนักงานต้อนรับและตอบคำถามลูกค้า',
 };
 
-// ข้อมูลเริ่มต้นสำหรับระบบแชทเพจ Facebook Messenger & AI Auto-Follow-Up
 const INITIAL_MESSENGER_LEADS = [
   {
     id: 'MSG-101',
     fbName: 'คุณมินตรา (Mintra S.)',
     avatarBg: 'bg-pink-500',
     phone: '0865554321',
-    status: 'waiting_deposit', // 'new_inquiry' | 'ai_replying' | 'waiting_deposit' | 'follow_up' | 'confirmed'
+    status: 'waiting_deposit',
     interestedCheckIn: getTodayStr(1),
     interestedCheckOut: getTodayStr(3),
     interestedRoomType: 'Villa',
@@ -799,7 +799,7 @@ const INITIAL_MESSENGER_LEADS = [
 // ==========================================
 // 3. ฟังก์ชันช่วยเหลือด้านวันที่และการคำนวณ
 // ==========================================
-function formatThaiDate(dateStr) {
+function formatThaiDate(dateStr: string) {
   if (!dateStr) return '-';
   try {
     const [y, m, d] = dateStr.split('-').map(Number);
@@ -823,25 +823,31 @@ function formatThaiDate(dateStr) {
   }
 }
 
-function getNightCount(checkIn, checkOut) {
+function getNightCount(checkIn: string, checkOut: string) {
   if (!checkIn || !checkOut) return 1;
   const start = new Date(checkIn);
   const end = new Date(checkOut);
-  const diff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  const diff = Math.round(
+    (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
+  );
   return diff > 0 ? diff : 1;
 }
 
-// ตรวจสอบว่าช่วงวันที่ทับซ้อนกันหรือไม่ (ป้องกันการจองซ้ำ)
-function isDateOverlap(startA, endA, startB, endB) {
+function isDateOverlap(
+  startA: string,
+  endA: string,
+  startB: string,
+  endB: string
+) {
   return startA < endB && endA > startB;
 }
 
 // ==========================================
-// 4. เรียกใช้งาน Gemini API (AI Assistant & Messenger Auto-Reply)
+// 4. เรียกใช้งาน Gemini API
 // ==========================================
-async function callGeminiAI(userPrompt, systemContext) {
+async function callGeminiAI(userPrompt: string, systemContext: string) {
   const apiKey = '';
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
   const payload = {
     contents: [{ parts: [{ text: userPrompt }] }],
@@ -876,55 +882,64 @@ async function callGeminiAI(userPrompt, systemContext) {
 // 5. คอมโพเนนต์หลัก App
 // ==========================================
 export default function App() {
-  // Navigation Tab: 'booking' | 'reports' | 'messenger' | 'rooms' | 'settings'
   const [activeTab, setActiveTab] = useState('booking');
 
-  // Core States
-  const [rooms, setRooms] = useState(INITIAL_ROOMS);
-  const [bookings, setBookings] = useState(INITIAL_BOOKINGS);
-  const [settings, setSettings] = useState(INITIAL_SETTINGS);
+  const [rooms, setRooms] = useState<any[]>(INITIAL_ROOMS);
+  const [bookings, setBookings] = useState<any[]>(INITIAL_BOOKINGS);
+  const [settings, setSettings] = useState<any>(INITIAL_SETTINGS);
 
-  // Toast Notification
-  const [toast, setToast] = useState(null);
-  const showToast = (message, type = 'success') => {
+  const [toast, setToast] = useState<{ message: string; type: string } | null>(
+    null
+  );
+  const showToast = (message: string, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
   };
-// ภายใน App component:
-useEffect(() => {
-  if (!db) return;
 
-  // 1. ดึงและซิงค์ข้อมูลห้องพัก
-  const unsubRooms = onSnapshot(collection(db, 'rooms'), (snapshot) => {
-    if (!snapshot.empty) {
-      const roomList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setRooms(roomList as any);
-    }
-  });
+  // ดึงและซิงค์ข้อมูล Realtime จาก Firestore
+  useEffect(() => {
+    if (!db) return;
 
-  // 2. ดึงและซิงค์ข้อมูลการจอง
-  const unsubBookings = onSnapshot(collection(db, 'bookings'), (snapshot) => {
-    if (!snapshot.empty) {
-      const bookingList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setBookings(bookingList as any);
-    }
-  });
+    const unsubRooms = onSnapshot(collection(db, 'rooms'), (snapshot) => {
+      if (!snapshot.empty) {
+        const roomList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setRooms(roomList);
+      }
+    });
 
-  return () => {
-    unsubRooms();
-    unsubBookings();
-  };
-}, []);
-  // ==========================================
-  // State สำหรับระบบจองห้องพัก (Booking Tab)
-  // ==========================================
+    const unsubBookings = onSnapshot(collection(db, 'bookings'), (snapshot) => {
+      if (!snapshot.empty) {
+        const bookingList = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        }));
+        setBookings(bookingList);
+      }
+    });
+
+    const unsubSettings = onSnapshot(
+      doc(db, 'settings', 'general'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          setSettings(docSnap.data());
+        }
+      }
+    );
+
+    return () => {
+      unsubRooms();
+      unsubBookings();
+      unsubSettings();
+    };
+  }, []);
+
   const [filterCheckIn, setFilterCheckIn] = useState(getTodayStr(0));
   const [filterCheckOut, setFilterCheckOut] = useState(getTodayStr(1));
-  const [selectedRoomIdsForBooking, setSelectedRoomIdsForBooking] = useState(
-    []
-  );
+  const [selectedRoomIdsForBooking, setSelectedRoomIdsForBooking] = useState<
+    string[]
+  >([]);
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
-  const [editingBookingId, setEditingBookingId] = useState(null);
+  const [editingBookingId, setEditingBookingId] = useState<string | null>(null);
 
   const [bookingForm, setBookingForm] = useState({
     guestName: '',
@@ -936,45 +951,33 @@ useEffect(() => {
     isFullyPaid: false,
   });
 
-  // ==========================================
-  // State สำหรับ Slip & QR Modal (แชร์รูปใบยืนยัน / ยอดคงค้าง / รวมบิล)
-  // ==========================================
-  const [slipModalData, setSlipModalData] = useState(null);
-  // { bookingsList: [...], mode: 'confirmation' | 'remaining' | 'combined', title: '' }
+  const [slipModalData, setSlipModalData] = useState<any>(null);
   const [generatedSlipDataUrl, setGeneratedSlipDataUrl] = useState('');
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
-  // ==========================================
-  // State สำหรับระบบรายงานและรวมบิล (Reports Tab)
-  // ==========================================
-  const [reportPeriod, setReportPeriod] = useState('daily'); // 'daily' | 'weekly' | 'monthly'
+  const [reportPeriod, setReportPeriod] = useState('daily');
   const [reportBaseDate, setReportBaseDate] = useState(getTodayStr(0));
   const [reportSearch, setReportSearch] = useState('');
   const [selectedBookingIdsForCombine, setSelectedBookingIdsForCombine] =
-    useState([]);
+    useState<string[]>([]);
 
-  // ==========================================
-  // State สำหรับการจัดการห้องพัก (Rooms Tab)
-  // ==========================================
   const [roomModalOpen, setRoomModalOpen] = useState(false);
-  const [editingRoom, setEditingRoom] = useState(null);
+  const [editingRoom, setEditingRoom] = useState<any>(null);
   const [roomForm, setRoomForm] = useState({
     number: '',
     name: '',
     type: 'Deluxe',
     price: 1200,
     capacity: 2,
-    amenitiesText: 'Wi-Fi, แอร์, เครื่องทำน้ำอุ่น',
+    amenitiesText: 'Wi-Fi, แอร์, ทีวี Smart TV, เครื่องทำน้ำอุ่น',
     status: 'active',
   });
 
-  // Quick PromptPay Modal
   const [quickPromptPayOpen, setQuickPromptPayOpen] = useState(false);
 
-  // ==========================================
-  // State สำหรับระบบ AI Messenger Inbox & Follow-up Hub
-  // ==========================================
-  const [messengerLeads, setMessengerLeads] = useState(INITIAL_MESSENGER_LEADS);
+  const [messengerLeads, setMessengerLeads] = useState<any[]>(
+    INITIAL_MESSENGER_LEADS
+  );
   const [activeLeadId, setActiveLeadId] = useState('MSG-101');
   const [leadFilterStatus, setLeadFilterStatus] = useState('all');
   const [pageReplyInput, setPageReplyInput] = useState('');
@@ -990,9 +993,8 @@ useEffect(() => {
   });
   const [fbSetupModalOpen, setFbSetupModalOpen] = useState(false);
 
-  // State สำหรับ Floating AI Assistant Widget
   const [aiWidgetOpen, setAiWidgetOpen] = useState(false);
-  const [aiChatMessages, setAiChatMessages] = useState([
+  const [aiChatMessages, setAiChatMessages] = useState<any[]>([
     {
       role: 'assistant',
       text: 'สวัสดีค่ะ! ฉันคือผู้ช่วย AI ประจำรีสอร์ท สามารถถามสรุปห้องว่างวันนี้ ยอดค้างชำระ หรือให้ช่วยร่างข้อความส่งหาลูกค้าได้เลยนะคะ ✨',
@@ -1001,10 +1003,7 @@ useEffect(() => {
   const [aiUserInput, setAiUserInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
-  // ==========================================
-  // ฟังก์ชันคำนวณการเงินของแต่ละใบจอง
-  // ==========================================
-  const getBookingFinancials = (booking) => {
+  const getBookingFinancials = (booking: any) => {
     const room = rooms.find((r) => r.id === booking.roomId);
     const nights = getNightCount(booking.checkIn, booking.checkOut);
     const roomPrice = room ? Number(room.price) : 0;
@@ -1031,9 +1030,6 @@ useEffect(() => {
     };
   };
 
-  // ==========================================
-  // คำนวณห้องว่างตามวัน Check-in / Check-out ที่เลือก
-  // ==========================================
   const roomAvailabilityList = useMemo(() => {
     return rooms.map((room) => {
       const overlappingBooking = bookings.find(
@@ -1056,7 +1052,6 @@ useEffect(() => {
     [roomAvailabilityList]
   );
 
-  // สร้างรูปภาพใบยืนยันการจอง + QR Code อัตโนมัติเมื่อเปิด Slip Modal
   useEffect(() => {
     let active = true;
     if (slipModalData && slipModalData.bookingsList?.length > 0) {
@@ -1084,9 +1079,6 @@ useEffect(() => {
     };
   }, [slipModalData, settings, rooms, bookings]);
 
-  // ==========================================
-  // ฟังก์ชันดาวน์โหลดและแชร์รูปภาพใบจอง / QR Code ส่ง LINE & Messenger
-  // ==========================================
   const handleDownloadSlipImage = async () => {
     if (!slipModalData) return;
     try {
@@ -1152,7 +1144,6 @@ useEffect(() => {
         });
         showToast('เปิดเมนูแชร์ข้อความสำเร็จ!');
       } else {
-        // Fallback กรณีเปิดบน Desktop Browser ที่ไม่รองรับ Web Share File API: ดาวน์โหลดรูป + คัดลอกข้อความอัตโนมัติ
         await navigator.clipboard.writeText(summaryText);
         const dataUrl = canvas.toDataURL('image/png');
         const link = document.createElement('a');
@@ -1163,7 +1154,7 @@ useEffect(() => {
           'ดาวน์โหลดรูปภาพ QR และคัดลอกข้อความสำหรับวางใน LINE / Messenger แล้ว!'
         );
       }
-    } catch (err) {
+    } catch (err: any) {
       setIsGeneratingImage(false);
       if (err?.name !== 'AbortError') {
         showToast(
@@ -1174,7 +1165,7 @@ useEffect(() => {
     }
   };
 
-  const buildTextReceipt = (bookingsList, mode) => {
+  const buildTextReceipt = (bookingsList: any[], mode: string) => {
     if (!bookingsList || bookingsList.length === 0) return '';
     const first = bookingsList[0];
     let grandTotal = 0;
@@ -1216,10 +1207,10 @@ useEffect(() => {
     ].join('\n');
   };
 
-  // ==========================================
-  // การจัดการจองห้องพัก (สร้าง / แก้ไข / ยกเลิก)
-  // ==========================================
-  const openNewBookingModal = (roomIdsToBook, prefillData = null) => {
+  const openNewBookingModal = (
+    roomIdsToBook: string[],
+    prefillData: any = null
+  ) => {
     if (!roomIdsToBook || roomIdsToBook.length === 0) {
       showToast('กรุณาเลือกห้องว่างอย่างน้อย 1 ห้องก่อนทำการจอง', 'error');
       return;
@@ -1245,7 +1236,7 @@ useEffect(() => {
     setBookingModalOpen(true);
   };
 
-  const openEditBookingModal = (booking) => {
+  const openEditBookingModal = (booking: any) => {
     setEditingBookingId(booking.id);
     setFilterCheckIn(booking.checkIn);
     setFilterCheckOut(booking.checkOut);
@@ -1262,7 +1253,7 @@ useEffect(() => {
     setBookingModalOpen(true);
   };
 
-  const handleSaveBooking = (e) => {
+  const handleSaveBooking = (e: React.FormEvent) => {
     e.preventDefault();
     if (!bookingForm.guestName.trim() || !bookingForm.phone.trim()) {
       showToast('กรุณากรอกชื่อผู้เข้าพักและเบอร์โทรศัพท์ให้ครบถ้วน', 'error');
@@ -1274,7 +1265,6 @@ useEffect(() => {
       return;
     }
 
-    // ตรวจสอบการจองซ้ำซ้อนอีกครั้ง
     for (const rId of selectedRoomIdsForBooking) {
       const conflict = bookings.find(
         (b) =>
@@ -1294,8 +1284,9 @@ useEffect(() => {
     }
 
     if (editingBookingId) {
+      const existing = bookings.find((b) => b.id === editingBookingId);
       const updatedBooking = {
-        ...bookings.find((b) => b.id === editingBookingId),
+        ...existing,
         roomId: selectedRoomIdsForBooking[0],
         guestName: bookingForm.guestName.trim(),
         phone: bookingForm.phone.trim(),
@@ -1311,6 +1302,14 @@ useEffect(() => {
       setBookings((prev) =>
         prev.map((b) => (b.id === editingBookingId ? updatedBooking : b))
       );
+
+      // บันทึกแก้ไขการจองลง Firestore
+      if (db) {
+        setDoc(doc(db, 'bookings', editingBookingId), updatedBooking, {
+          merge: true,
+        }).catch((err) => console.error('Error updating booking:', err));
+      }
+
       setBookingModalOpen(false);
       showToast('บันทึกการแก้ไขข้อมูลการจองเรียบร้อยแล้ว');
       setSlipModalData({
@@ -1319,7 +1318,6 @@ useEffect(() => {
         title: 'ใบยืนยันการจองห้องพัก (อัปเดตล่าสุด)',
       });
     } else {
-      // กรณีจองใหม่ (รองรับจองพร้อมกันหลายห้อง แบ่งเงินมัดจำเฉลี่ยต่อห้อง)
       const count = selectedRoomIdsForBooking.length;
       const depositPerRoom = Math.round(
         (Number(bookingForm.depositPaid) || 0) / count
@@ -1345,25 +1343,21 @@ useEffect(() => {
       });
 
       setBookings((prev) => [...newBookingsCreated, ...prev]);
-      (async () => {
-      try {
-        if (db) {
-          for (const booking of newBookingsCreated) {
-            await addDoc(collection(db, 'bookings'), {
-              ...booking,
-              createdAt: new Date().toISOString()
-            });
-          }
-        }
-      } catch (error) {
-        console.error("Error saving booking:", error);
+
+      // บันทึกการจองใหม่ลง Firestore โดยใช้ Document ID เดียวกับ booking.id
+      if (db) {
+        newBookingsCreated.forEach((booking) => {
+          setDoc(doc(db, 'bookings', booking.id), {
+            ...booking,
+            createdAt: new Date().toISOString(),
+          }).catch((error) => console.error('Error saving booking:', error));
+        });
       }
-    })();
+
       setSelectedRoomIdsForBooking([]);
       setBookingModalOpen(false);
       showToast(`ยืนยันการจองสำเร็จ ${newBookingsCreated.length} ห้อง!`);
 
-      // เปิดหน้าใบยืนยันการจองพร้อม QR Code ทันที
       setSlipModalData({
         bookingsList: newBookingsCreated,
         mode: 'confirmation',
@@ -1372,7 +1366,7 @@ useEffect(() => {
     }
   };
 
-  const handleMarkAsPaid = (bookingsToMark) => {
+  const handleMarkAsPaid = (bookingsToMark: any[]) => {
     const ids = bookingsToMark.map((b) => b.id);
     setBookings((prev) =>
       prev.map((b) => {
@@ -1387,6 +1381,18 @@ useEffect(() => {
         return b;
       })
     );
+
+    // อัปเดตสถานะชำระเงินลง Firestore
+    if (db) {
+      bookingsToMark.forEach((b) => {
+        const fin = getBookingFinancials(b);
+        updateDoc(doc(db, 'bookings', b.id), {
+          depositPaid: fin.grandTotal,
+          isFullyPaid: true,
+        }).catch((err) => console.error('Error marking as paid:', err));
+      });
+    }
+
     showToast('บันทึกสถานะชำระเงินครบเต็มจำนวนเรียบร้อยแล้ว!');
     if (slipModalData) {
       setSlipModalData(null);
@@ -1394,14 +1400,19 @@ useEffect(() => {
     setSelectedBookingIdsForCombine([]);
   };
 
-  const handleCancelBooking = (bookingId) => {
+  const handleCancelBooking = (bookingId: string) => {
     setBookings((prev) => prev.filter((b) => b.id !== bookingId));
+
+    // ลบหรือปรับสถานะการจองใน Firestore
+    if (db) {
+      deleteDoc(doc(db, 'bookings', bookingId)).catch((err) =>
+        console.error('Error deleting booking:', err)
+      );
+    }
+
     showToast('ยกเลิกและคืนสถานะห้องว่างเรียบร้อยแล้ว', 'info');
   };
 
-  // ==========================================
-  // ระบบคำนวณช่วงเวลารายงาน (รายวัน / รายสัปดาห์ / รายเดือน)
-  // ==========================================
   const reportDateRange = useMemo(() => {
     const start = new Date(reportBaseDate);
     const end = new Date(reportBaseDate);
@@ -1461,9 +1472,6 @@ useEffect(() => {
     });
   }, [rooms, bookings, reportDateRange]);
 
-  // ==========================================
-  // ระบบจัดการห้องพัก (เพิ่ม / แก้ไข / ลบ)
-  // ==========================================
   const openAddRoomModal = () => {
     setEditingRoom(null);
     setRoomForm({
@@ -1478,7 +1486,7 @@ useEffect(() => {
     setRoomModalOpen(true);
   };
 
-  const openEditRoomModal = (room) => {
+  const openEditRoomModal = (room: any) => {
     setEditingRoom(room);
     setRoomForm({
       number: room.number,
@@ -1492,7 +1500,7 @@ useEffect(() => {
     setRoomModalOpen(true);
   };
 
-  const handleSaveRoom = (e) => {
+  const handleSaveRoom = (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomForm.number.trim() || !roomForm.name.trim()) {
       showToast('กรุณาระบุเลขห้องและชื่อห้องพัก', 'error');
@@ -1505,34 +1513,28 @@ useEffect(() => {
       .filter(Boolean);
 
     if (editingRoom) {
+      const updatedRoom = {
+        ...editingRoom,
+        number: roomForm.number.trim(),
+        name: roomForm.name.trim(),
+        type: roomForm.type,
+        price: Number(roomForm.price) || 0,
+        capacity: Number(roomForm.capacity) || 2,
+        amenities: amenitiesArr,
+        status: roomForm.status,
+      };
+
       setRooms((prev) =>
-        prev.map((r) =>
-          r.id === editingRoom.id
-            ? {
-                ...r,
-                number: roomForm.number.trim(),
-                name: roomForm.name.trim(),
-                type: roomForm.type,
-                price: Number(roomForm.price) || 0,
-                capacity: Number(roomForm.capacity) || 2,
-                amenities: amenitiesArr,
-                status: roomForm.status,
-              }
-            : r
-        )
+        prev.map((r) => (r.id === editingRoom.id ? updatedRoom : r))
       );
+
+      // อัปเดตห้องพักลง Firestore
       if (db && editingRoom?.id) {
-        setDoc(doc(db, 'rooms', editingRoom.id), {
-          ...editingRoom,
-          number: roomForm.number.trim(),
-          name: roomForm.name.trim(),
-          type: roomForm.type,
-          price: Number(roomForm.price) || 0,
-          capacity: Number(roomForm.capacity) || 2,
-          amenities: amenitiesArr,
-          status: roomForm.status,
-        }, { merge: true }).catch((err) => console.error("Error updating room:", err));
+        setDoc(doc(db, 'rooms', editingRoom.id), updatedRoom, {
+          merge: true,
+        }).catch((err) => console.error('Error updating room:', err));
       }
+
       showToast(`อัปเดตข้อมูลห้อง ${roomForm.number} เรียบร้อยแล้ว`);
     } else {
       const newRoom = {
@@ -1545,24 +1547,50 @@ useEffect(() => {
         amenities: amenitiesArr,
         status: roomForm.status,
       };
+
       setRooms((prev) => [...prev, newRoom]);
+
+      // เพิ่มห้องพักใหม่ลง Firestore
       if (db) {
-        setDoc(doc(db, 'rooms', newRoom.id), newRoom)
-          .catch((err) => console.error("Error creating room:", err));
+        setDoc(doc(db, 'rooms', newRoom.id), newRoom).catch((err) =>
+          console.error('Error creating room:', err)
+        );
       }
+
       showToast(`เพิ่มห้องพัก ${newRoom.number} สำเร็จ!`);
     }
     setRoomModalOpen(false);
   };
 
-  const handleDeleteRoom = (roomId) => {
+  const handleDeleteRoom = (roomId: string) => {
     setRooms((prev) => prev.filter((r) => r.id !== roomId));
+
+    // ลบห้องพักออกจาก Firestore
+    if (db && roomId) {
+      deleteDoc(doc(db, 'rooms', roomId)).catch((err) =>
+        console.error('Error deleting room:', err)
+      );
+    }
+
     showToast('ลบห้องพักออกจากระบบแล้ว', 'info');
   };
 
-  // ==========================================
-  // ระบบ AI Messenger Auto-Reply & Auto Follow-up
-  // ==========================================
+  const handleSaveSettings = () => {
+    // บันทึกการตั้งค่า PromptPay และข้อมูลที่พักลง Firestore
+    if (db) {
+      setDoc(doc(db, 'settings', 'general'), settings, { merge: true })
+        .then(() => {
+          showToast('บันทึกการตั้งค่าระบบและพร้อมเพย์เรียบร้อยแล้ว!');
+        })
+        .catch((err) => {
+          console.error('Error saving settings:', err);
+          showToast('เกิดข้อผิดพลาดในการบันทึกการตั้งค่า', 'error');
+        });
+    } else {
+      showToast('บันทึกการตั้งค่าระบบและพร้อมเพย์เรียบร้อยแล้ว!');
+    }
+  };
+
   const activeLead = useMemo(
     () =>
       messengerLeads.find((l) => l.id === activeLeadId) || messengerLeads[0],
@@ -1604,7 +1632,10 @@ ${activeBookingsSummary}
 หน้าที่ของคุณคือตอบแชทลูกค้าอย่างเป็นธรรมชาติ สุภาพ กระชับ ชัดเจน แจ้งห้องว่างและราคาที่ถูกต้อง พร้อมเชิญชวนให้โอนมัดจำผ่าน PromptPay เพื่อล็อกห้องพัก`;
   };
 
-  const handleAiGenerateMessengerReply = async (lead, mode = 'reply') => {
+  const handleAiGenerateMessengerReply = async (
+    lead: any,
+    mode = 'reply'
+  ) => {
     if (!lead) return;
     setIsAiGeneratingReply(true);
 
@@ -1632,7 +1663,7 @@ ${activeBookingsSummary}
         : 'ไม่มีห้องว่างในช่วงดังกล่าว';
 
     const chatTranscript = lead.messages
-      .map((m) => `${m.sender === 'customer' ? 'ลูกค้า' : 'เพจ'}: ${m.text}`)
+      .map((m: any) => `${m.sender === 'customer' ? 'ลูกค้า' : 'เพจ'}: ${m.text}`)
       .join('\n');
 
     const prompt =
@@ -1661,7 +1692,7 @@ ${chatTranscript}
 ช่วยร่างข้อความตอบกลับลูกค้าล่าสุดอย่างสุภาพ แจ้งรายละเอียดห้องว่าง ราคา และเชิญชวนจองพร้อมแจ้งเลขพร้อมเพย์ ${settings.promptPayId} (${settings.promptPayName}) (ความยาวกระชับ อ่านง่ายบนมือถือ)`;
 
     const aiReply = await callGeminiAI(prompt, buildSystemKnowledgePrompt());
-    setPageReplyInput(aiReply.trim());
+    setPageReplyInput((aiReply || '').trim());
     setIsAiGeneratingReply(false);
     showToast(
       mode === 'followup'
@@ -1670,7 +1701,7 @@ ${chatTranscript}
     );
   };
 
-  const handleSendMessengerMessage = (customText = null) => {
+  const handleSendMessengerMessage = (customText: string | null = null) => {
     const textToSend = (customText ?? pageReplyInput).trim();
     if (!textToSend || !activeLead) return;
 
@@ -1789,7 +1820,7 @@ ${chatTranscript}
         )
     );
 
-    const newMessages = [
+    const newMessages: any[] = [
       {
         sender: 'customer',
         text: customerMsg,
@@ -1839,7 +1870,7 @@ ${chatTranscript}
     );
   };
 
-  const handleConvertLeadToBooking = (lead) => {
+  const handleConvertLeadToBooking = (lead: any) => {
     setFilterCheckIn(lead.interestedCheckIn);
     setFilterCheckOut(lead.interestedCheckOut);
 
@@ -1881,10 +1912,7 @@ ${chatTranscript}
     });
   };
 
-  // ==========================================
-  // Floating AI Assistant Chat
-  // ==========================================
-  const handleSendAiAssistantMessage = async (presetText = null) => {
+  const handleSendAiAssistantMessage = async (presetText: string | null = null) => {
     const query = (presetText ?? aiUserInput).trim();
     if (!query) return;
 
@@ -1893,7 +1921,10 @@ ${chatTranscript}
     setAiLoading(true);
 
     const reply = await callGeminiAI(query, buildSystemKnowledgePrompt());
-    setAiChatMessages((prev) => [...prev, { role: 'assistant', text: reply }]);
+    setAiChatMessages((prev) => [
+      ...prev,
+      { role: 'assistant', text: reply || '' },
+    ]);
     setAiLoading(false);
   };
 
@@ -1902,12 +1933,8 @@ ${chatTranscript}
     [messengerLeads]
   );
 
-  // ==========================================
-  // UI Rendering
-  // ==========================================
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-28 font-sans selection:bg-emerald-500 selection:text-white">
-      {/* Toast Notification */}
       {toast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md animate-bounce">
           <div
@@ -1929,7 +1956,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* Top Mobile App Header */}
       <header className="sticky top-0 z-30 bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-700 text-white shadow-md">
         <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -1954,7 +1980,6 @@ ${chatTranscript}
             </div>
           </div>
 
-          {/* ปุ่มลัดตั้งค่าเบอร์พร้อมเพย์ทันที */}
           <button
             onClick={() => setQuickPromptPayOpen(true)}
             className="shrink-0 bg-white/15 hover:bg-white/25 active:scale-95 transition px-3 py-2 rounded-xl border border-white/25 flex items-center gap-1.5 text-xs font-medium"
@@ -1972,14 +1997,9 @@ ${chatTranscript}
         </div>
       </header>
 
-      {/* Main Content Container */}
       <main className="max-w-3xl mx-auto px-3.5 pt-4 space-y-5">
-        {/* ============================================================
-            TAB 1: ระบบจองห้องพัก & เช็คห้องว่าง (BOOKING TAB)
-        ============================================================ */}
         {activeTab === 'booking' && (
           <div className="space-y-4">
-            {/* การ์ดตัวกรองวัน Check-in / Check-out */}
             <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200/80">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -2050,7 +2070,6 @@ ${chatTranscript}
                 </div>
               </div>
 
-              {/* แถบปุ่มจองหลายห้องพร้อมกัน */}
               {selectedRoomIdsForBooking.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 bg-emerald-50/80 -mx-4 -mb-4 px-4 py-3 rounded-b-3xl">
                   <div className="text-xs font-semibold text-emerald-900">
@@ -2081,7 +2100,6 @@ ${chatTranscript}
               )}
             </div>
 
-            {/* รายการห้องพักพร้อมสถานะ ว่าง / จองแล้ว */}
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <h3 className="font-bold text-slate-700 text-sm">
@@ -2095,9 +2113,7 @@ ${chatTranscript}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {roomAvailabilityList.map((room) => {
-                  const isSelected = selectedRoomIdsForBooking.includes(
-                    room.id
-                  );
+                  const isSelected = selectedRoomIdsForBooking.includes(room.id);
                   const nights = getNightCount(filterCheckIn, filterCheckOut);
                   const totalForPeriod = room.price * nights;
 
@@ -2155,9 +2171,8 @@ ${chatTranscript}
                         )}
                       </div>
 
-                      {/* Amenities */}
                       <div className="flex flex-wrap gap-1.5 mt-3">
-                        {(room.amenities || []).map((am, i) => (
+                        {(room.amenities || []).map((am: string, i: number) => (
                           <span
                             key={i}
                             className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-lg"
@@ -2167,7 +2182,6 @@ ${chatTranscript}
                         ))}
                       </div>
 
-                      {/* ราคาและปุ่มจัดการ */}
                       {room.isAvailable ? (
                         <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
                           <div>
@@ -2270,12 +2284,8 @@ ${chatTranscript}
           </div>
         )}
 
-        {/* ============================================================
-            TAB 2: รายงานผู้เข้าพัก & รวมบิลยอดคงค้าง (REPORTS TAB)
-        ============================================================ */}
         {activeTab === 'reports' && (
           <div className="space-y-4">
-            {/* ตัวกรอง Dropdown รายวัน / รายสัปดาห์ / รายเดือน */}
             <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
@@ -2293,7 +2303,6 @@ ${chatTranscript}
                   </div>
                 </div>
 
-                {/* Dropdown Filter ตามโจทย์ */}
                 <select
                   value={reportPeriod}
                   onChange={(e) => {
@@ -2335,7 +2344,6 @@ ${chatTranscript}
               </div>
             </div>
 
-            {/* ส่วนแสดงห้องว่างตามช่วง Filter ด้านบน */}
             <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200">
               <div className="flex items-center justify-between mb-2.5">
                 <h3 className="font-bold text-xs sm:text-sm text-slate-700 flex items-center gap-1.5">
@@ -2379,7 +2387,6 @@ ${chatTranscript}
               )}
             </div>
 
-            {/* แถบปุ่ม "รวมบิลและสร้าง QR Code" เมื่อติ๊กเลือกมากกว่า 1 ใบจอง */}
             {selectedBookingIdsForCombine.length > 0 && (
               <div className="sticky top-16 z-20 bg-slate-900 text-white rounded-2xl p-3.5 shadow-xl flex items-center justify-between gap-2">
                 <div>
@@ -2417,7 +2424,6 @@ ${chatTranscript}
               </div>
             )}
 
-            {/* รายชื่อผู้เข้าพักแบบ Card รองรับมือถือ */}
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <h3 className="font-bold text-slate-700 text-sm">
@@ -2492,7 +2498,6 @@ ${chatTranscript}
                           </div>
                         </div>
 
-                        {/* ปุ่มกดโทรออกหาลูกค้าทันทีบนมือถือ */}
                         <a
                           href={`tel:${b.phone}`}
                           className="shrink-0 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition"
@@ -2508,7 +2513,6 @@ ${chatTranscript}
                         </div>
                       )}
 
-                      {/* สรุปยอดเงินของการ์ด */}
                       <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-center bg-slate-50 rounded-2xl p-2.5">
                         <div>
                           <div className="text-[10px] text-slate-500">
@@ -2544,7 +2548,6 @@ ${chatTranscript}
                         </div>
                       </div>
 
-                      {/* ปุ่ม Action ในการ์ด */}
                       <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
                         <div className="flex items-center gap-1.5">
                           <button
@@ -2600,12 +2603,8 @@ ${chatTranscript}
           </div>
         )}
 
-        {/* ============================================================
-            TAB 3: แชทเพจ Facebook Messenger & AI Auto Follow-up Hub
-        ============================================================ */}
         {activeTab === 'messenger' && (
           <div className="space-y-4">
-            {/* แบนเนอร์สถานะการเชื่อมต่อ Facebook Messenger + ปุ่ม AI Follow-up ทั้งหมด */}
             <div className="bg-gradient-to-br from-blue-600 via-indigo-600 to-slate-900 text-white rounded-3xl p-4 shadow-md">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-3">
@@ -2643,7 +2642,6 @@ ${chatTranscript}
                 </div>
               </div>
 
-              {/* แถบควบคุม AI Auto-Pilot & 1-Click Follow-up */}
               <div className="mt-3.5 pt-3 border-t border-white/15 flex items-center justify-between gap-2 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-blue-100">
                   <input
@@ -2671,7 +2669,6 @@ ${chatTranscript}
               </div>
             </div>
 
-            {/* ตัวกรองสถานะลูกค้าในเพจ */}
             <div className="flex gap-1.5 overflow-x-auto pb-1">
               {[
                 { id: 'all', label: 'ทั้งหมด' },
@@ -2694,9 +2691,7 @@ ${chatTranscript}
               ))}
             </div>
 
-            {/* รายชื่อแชทลูกค้า + หน้าต่างสนทนา */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5">
-              {/* คอลัมน์ซ้าย: รายชื่อลูกค้าที่ทักเพจ */}
               <div className="md:col-span-5 space-y-2">
                 {messengerLeads
                   .filter(
@@ -2706,7 +2701,7 @@ ${chatTranscript}
                   )
                   .map((lead) => {
                     const isSelected = activeLead?.id === lead.id;
-                    const statusBadge = {
+                    const statusBadge: any = {
                       new_inquiry: {
                         text: 'ทักมาใหม่',
                         cls: 'bg-rose-100 text-rose-700',
@@ -2789,10 +2784,8 @@ ${chatTranscript}
                   })}
               </div>
 
-              {/* คอลัมน์ขวา: กล่องแชทและการสั่งงาน AI */}
               {activeLead && (
                 <div className="md:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-                  {/* Header ของแชทลูกค้า */}
                   <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 flex-wrap">
                     <div>
                       <div className="font-bold text-slate-800 text-sm flex items-center gap-2">
@@ -2821,9 +2814,8 @@ ${chatTranscript}
                     </button>
                   </div>
 
-                  {/* รายการข้อความแชท */}
                   <div className="p-4 space-y-3 max-h-80 overflow-y-auto bg-slate-50/50">
-                    {activeLead.messages.map((msg, idx) => (
+                    {activeLead.messages.map((msg: any, idx: number) => (
                       <div
                         key={idx}
                         className={`flex flex-col ${
@@ -2839,7 +2831,7 @@ ${chatTranscript}
                               : 'bg-blue-600 text-white rounded-tr-sm shadow-sm'
                           }`}
                         >
-                          {(msg as any).isAiAuto && (
+                          {msg.isAiAuto && (
                             <div className="text-[10px] font-bold text-blue-200 mb-1 flex items-center gap-1">
                               <Sparkles className="w-3 h-3" />{' '}
                               ตอบและติดตามอัตโนมัติโดย AI
@@ -2854,7 +2846,6 @@ ${chatTranscript}
                     ))}
                   </div>
 
-                  {/* ปุ่มผู้ช่วย AI อัจฉริยะสำหรับแชทนี้ */}
                   <div className="px-3.5 py-2.5 bg-indigo-50/70 border-t border-indigo-100 flex items-center gap-2 overflow-x-auto">
                     <button
                       type="button"
@@ -2883,7 +2874,6 @@ ${chatTranscript}
                     </button>
                   </div>
 
-                  {/* ช่องพิมพ์ตอบกลับเพจ */}
                   <div className="p-3 bg-white border-t border-slate-200 flex items-end gap-2">
                     <textarea
                       rows={2}
@@ -2906,9 +2896,6 @@ ${chatTranscript}
           </div>
         )}
 
-        {/* ============================================================
-            TAB 4: จัดการห้องพัก (ROOMS MANAGEMENT TAB)
-        ============================================================ */}
         {activeTab === 'rooms' && (
           <div className="space-y-4">
             <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 flex items-center justify-between">
@@ -2955,7 +2942,7 @@ ${chatTranscript}
                     </div>
 
                     <div className="flex flex-wrap gap-1 mt-3">
-                      {(room.amenities || []).map((am, idx) => (
+                      {(room.amenities || []).map((am: string, idx: number) => (
                         <span
                           key={idx}
                           className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-lg"
@@ -2986,12 +2973,8 @@ ${chatTranscript}
           </div>
         )}
 
-        {/* ============================================================
-            TAB 5: ตั้งค่าระบบ PromptPay, AI & วิธีติดตั้งง่ายๆ (SETTINGS TAB)
-        ============================================================ */}
         {activeTab === 'settings' && (
           <div className="space-y-4">
-            {/* การ์ดตั้งค่า PromptPay และข้อมูลที่พัก */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200 space-y-4">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
@@ -3017,7 +3000,7 @@ ${chatTranscript}
                     type="text"
                     value={settings.resortName}
                     onChange={(e) =>
-                      setSettings((prev) => ({
+                      setSettings((prev: any) => ({
                         ...prev,
                         resortName: e.target.value,
                       }))
@@ -3034,7 +3017,7 @@ ${chatTranscript}
                     type="text"
                     value={settings.promptPayId}
                     onChange={(e) =>
-                      setSettings((prev) => ({
+                      setSettings((prev: any) => ({
                         ...prev,
                         promptPayId: e.target.value,
                       }))
@@ -3052,7 +3035,7 @@ ${chatTranscript}
                     type="text"
                     value={settings.promptPayName}
                     onChange={(e) =>
-                      setSettings((prev) => ({
+                      setSettings((prev: any) => ({
                         ...prev,
                         promptPayName: e.target.value,
                       }))
@@ -3069,7 +3052,7 @@ ${chatTranscript}
                     type="text"
                     value={settings.wifiInfo}
                     onChange={(e) =>
-                      setSettings((prev) => ({
+                      setSettings((prev: any) => ({
                         ...prev,
                         wifiInfo: e.target.value,
                       }))
@@ -3087,7 +3070,7 @@ ${chatTranscript}
                   rows={2}
                   value={settings.houseRules}
                   onChange={(e) =>
-                    setSettings((prev) => ({
+                    setSettings((prev: any) => ({
                       ...prev,
                       houseRules: e.target.value,
                     }))
@@ -3097,16 +3080,14 @@ ${chatTranscript}
               </div>
 
               <button
-                onClick={() =>
-                  showToast('บันทึกการตั้งค่าระบบและพร้อมเพย์เรียบร้อยแล้ว!')
-                }
+                type="button"
+                onClick={handleSaveSettings}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-sm"
               >
                 บันทึกการตั้งค่าทั้งหมด
               </button>
             </div>
 
-            {/* คู่มือการติดตั้งลงมือถือ & เชื่อมเพจแบบไม่ต้องเขียนโค้ด */}
             <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200 space-y-3">
               <div className="flex items-center gap-2">
                 <Smartphone className="w-5 h-5 text-emerald-600" />
@@ -3152,9 +3133,6 @@ ${chatTranscript}
         )}
       </main>
 
-      {/* ============================================================
-          MODAL 1: ฟอร์มสร้าง / แก้ไขการจองห้องพัก
-      ============================================================ */}
       {bookingModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto shadow-2xl animate-in slide-in-from-bottom">
@@ -3220,7 +3198,6 @@ ${chatTranscript}
                 </div>
               </div>
 
-              {/* เตียงเสริม (ระบุราคาได้เอง) */}
               <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -3231,7 +3208,7 @@ ${chatTranscript}
                     min="0"
                     max="10"
                     value={bookingForm.extraBedCount}
-                   onChange={(e) =>
+                    onChange={(e) =>
                       setBookingForm((prev) => ({
                         ...prev,
                         extraBedCount: Number(e.target.value) || 0,
@@ -3260,7 +3237,6 @@ ${chatTranscript}
                 </div>
               </div>
 
-              {/* คำขอพิเศษ */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   คำขอพิเศษ / หมายเหตุเพิ่มเติม
@@ -3279,7 +3255,6 @@ ${chatTranscript}
                 />
               </div>
 
-              {/* เงินมัดจำ & สถานะการชำระ */}
               <div className="bg-emerald-50/70 p-3.5 rounded-2xl border border-emerald-200 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-emerald-900">
@@ -3338,9 +3313,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          MODAL 2: ใบยืนยันการจอง + QR Code พร้อมปุ่มเซฟรูป PNG & แชร์ส่ง LINE / Messenger
-      ============================================================ */}
       {slipModalData && (
         <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 max-h-[94vh] overflow-y-auto shadow-2xl space-y-4">
@@ -3361,7 +3333,6 @@ ${chatTranscript}
               </button>
             </div>
 
-            {/* ปุ่ม Action หลัก: เซฟเป็นรูปภาพ PNG และ แชร์ส่ง LINE / Messenger ทันที */}
             <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
@@ -3384,7 +3355,6 @@ ${chatTranscript}
               </button>
             </div>
 
-            {/* พรีวิวรูปภาพใบยืนยันการจอง + QR Code ที่วาดจาก Canvas จริง */}
             <div className="bg-slate-100 p-3 rounded-3xl border border-slate-200 flex flex-col items-center">
               <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-1">
                 <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
@@ -3406,7 +3376,6 @@ ${chatTranscript}
               ) : null}
             </div>
 
-            {/* ปุ่มคัดลอกข้อความสรุป และปุ่มยืนยันรับเงินครบแล้ว */}
             <div className="flex items-center justify-between gap-2 pt-1">
               <button
                 type="button"
@@ -3435,9 +3404,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          MODAL 3: เพิ่ม / แก้ไขห้องพัก
-      ============================================================ */}
       {roomModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl">
@@ -3516,7 +3482,10 @@ ${chatTranscript}
                     min="0"
                     value={roomForm.price}
                     onChange={(e) =>
-                      setRoomForm((p) => ({ ...p, price: Number(e.target.value) || 0 }))
+                      setRoomForm((p) => ({
+                        ...p,
+                        price: Number(e.target.value) || 0,
+                      }))
                     }
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-emerald-700"
                   />
@@ -3530,7 +3499,10 @@ ${chatTranscript}
                     min="1"
                     value={roomForm.capacity}
                     onChange={(e) =>
-                      setRoomForm((p) => ({ ...p, capacity: Number(e.target.value) || 0 }))
+                      setRoomForm((p) => ({
+                        ...p,
+                        capacity: Number(e.target.value) || 0,
+                      }))
                     }
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
                   />
@@ -3565,9 +3537,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          MODAL 4: ตั้งค่าเชื่อมต่อเพจ Facebook Messenger (3 ขั้นตอนง่ายๆ)
-      ============================================================ */}
       {fbSetupModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -3652,9 +3621,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          MODAL 5: เปลี่ยนเบอร์พร้อมเพย์ด่วน & ทดสอบสร้าง QR Code
-      ============================================================ */}
       {quickPromptPayOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl p-5 space-y-4 shadow-2xl">
@@ -3679,7 +3645,7 @@ ${chatTranscript}
                   type="text"
                   value={settings.promptPayId}
                   onChange={(e) =>
-                    setSettings((prev) => ({
+                    setSettings((prev: any) => ({
                       ...prev,
                       promptPayId: e.target.value,
                     }))
@@ -3696,7 +3662,7 @@ ${chatTranscript}
                   type="text"
                   value={settings.promptPayName}
                   onChange={(e) =>
-                    setSettings((prev) => ({
+                    setSettings((prev: any) => ({
                       ...prev,
                       promptPayName: e.target.value,
                     }))
@@ -3715,6 +3681,10 @@ ${chatTranscript}
 
             <button
               onClick={() => {
+                if (db) {
+                  setDoc(doc(db, 'settings', 'general'), settings, { merge: true })
+                    .catch((err) => console.error(err));
+                }
                 setQuickPromptPayOpen(false);
                 showToast('อัปเดตเลขพร้อมเพย์เรียบร้อยแล้ว!');
               }}
@@ -3726,9 +3696,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          Floating AI Assistant Button & Popup
-      ============================================================ */}
       <button
         onClick={() => setAiWidgetOpen((prev) => !prev)}
         className="fixed bottom-20 right-4 z-40 bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-3.5 rounded-full shadow-xl border-2 border-white flex items-center gap-1.5 active:scale-95 transition"
@@ -3793,9 +3760,6 @@ ${chatTranscript}
         </div>
       )}
 
-      {/* ============================================================
-          Bottom Navigation Bar (Mobile-First 5 เมนูหลัก)
-      ============================================================ */}
       <nav className="fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg">
         <div className="max-w-3xl mx-auto grid grid-cols-5 px-1 py-1.5">
           {[
