@@ -1101,7 +1101,7 @@ export default function App() {
       );
       const first = slipModalData.bookingsList[0];
       const fileName = `Booking_${first?.id || 'QR'}.png`;
-      const file = new File([blob], fileName, { type: 'image/png' });
+      const file = new File([blob as any], fileName, { type: 'image/png' });
 
       const summaryText = buildTextReceipt(
         slipModalData.bookingsList,
