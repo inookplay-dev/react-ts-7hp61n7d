@@ -3562,7 +3562,7 @@ ${chatTranscript}
                     onChange={(e) =>
                       setFbConfig((prev) => ({
                         ...prev,
-                        followUpHours: e.target.value,
+                        followUpHours: Number(e.target.value) || 0,
                       }))
                     }
                     className="w-16 bg-white border border-slate-300 rounded-lg px-2 py-1 text-center font-bold"
