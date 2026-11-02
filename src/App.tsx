@@ -2781,7 +2781,7 @@ ${chatTranscript}
                               : 'bg-blue-600 text-white rounded-tr-sm shadow-sm'
                           }`}
                         >
-                          {msg.isAiAuto && (
+                          {(msg as any).isAiAuto && (
                             <div className="text-[10px] font-bold text-blue-200 mb-1 flex items-center gap-1">
                               <Sparkles className="w-3 h-3" />{' '}
                               ตอบและติดตามอัตโนมัติโดย AI
