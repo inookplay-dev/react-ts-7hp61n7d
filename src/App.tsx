@@ -57,7 +57,18 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  query,
+  where,
+  getDocs,
 } from 'firebase/firestore';
+
+// ฟังก์ชันดึงเฉพาะตัวเลขมาเรียงลำดับจากน้อยไปมากอย่างแม่นยำ
+function sortRoomsByNumber(a: any, b: any) {
+  const numA = parseInt(String(a.number || '').replace(/\D/g, ''), 10) || 0;
+  const numB = parseInt(String(b.number || '').replace(/\D/g, ''), 10) || 0;
+  if (numA !== numB) return numA - numB;
+  return String(a.number || '').localeCompare(String(b.number || ''));
+}
 
 // ==========================================
 // 1. มาตรฐานการคำนวณ EMVCo PromptPay QR Code (ประเทศไทย)
@@ -617,6 +628,16 @@ const INITIAL_ROOMS = [
     status: 'active',
   },
   {
+    id: 'R103',
+    number: '103',
+    name: 'Cozy Standard B1',
+    type: 'Standard',
+    price: 850,
+    capacity: 2,
+    amenities: ['Wi-Fi', 'แอร์', 'เครื่องทำน้ำอุ่น'],
+    status: 'active',
+  },
+  {
     id: 'R201',
     number: '201',
     name: 'Pool Villa Suite',
@@ -640,16 +661,6 @@ const INITIAL_ROOMS = [
     price: 3200,
     capacity: 6,
     amenities: ['Wi-Fi', 'แอร์ 2 ตัว', '2 ห้องนอน', 'ระเบียงชมวิว', 'ไมโครเวฟ'],
-    status: 'active',
-  },
-  {
-    id: 'R103',
-    number: '103',
-    name: 'Cozy Standard B1',
-    type: 'Standard',
-    price: 850,
-    capacity: 2,
-    amenities: ['Wi-Fi', 'แอร์', 'เครื่องทำน้ำอุ่น'],
     status: 'active',
   },
 ];
@@ -896,25 +907,26 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // ดึงและซิงค์ข้อมูล Realtime จาก Firestore
+  // ดึงและซิงค์ข้อมูล Realtime จาก Firestore พร้อมจัดเรียงตามหมายเลขห้อง
   useEffect(() => {
     if (!db) return;
 
     const unsubRooms = onSnapshot(collection(db, 'rooms'), (snapshot) => {
       if (!snapshot.empty) {
-        const roomList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const roomList = snapshot.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort(sortRoomsByNumber);
         setRooms(roomList);
       }
     });
 
     const unsubBookings = onSnapshot(collection(db, 'bookings'), (snapshot) => {
-      if (!snapshot.empty) {
-        const bookingList = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-        setBookings(bookingList);
-      }
+      const bookingList = snapshot.docs.map((d) => ({
+        _docId: d.id,
+        id: d.id,
+        ...d.data(),
+      }));
+      setBookings(bookingList);
     });
 
     const unsubSettings = onSnapshot(
@@ -1030,21 +1042,24 @@ export default function App() {
     };
   };
 
+  // จัดเรียงรายการห้องพักตามตัวเลขล้วน 101, 102, 103, 104, 105, 106...
   const roomAvailabilityList = useMemo(() => {
-    return rooms.map((room) => {
-      const overlappingBooking = bookings.find(
-        (b) =>
-          b.status !== 'cancelled' &&
-          b.roomId === room.id &&
-          b.id !== editingBookingId &&
-          isDateOverlap(filterCheckIn, filterCheckOut, b.checkIn, b.checkOut)
-      );
-      return {
-        ...room,
-        isAvailable: room.status === 'active' && !overlappingBooking,
-        conflictBooking: overlappingBooking || null,
-      };
-    });
+    return rooms
+      .map((room) => {
+        const overlappingBooking = bookings.find(
+          (b) =>
+            b.status !== 'cancelled' &&
+            b.roomId === room.id &&
+            b.id !== editingBookingId &&
+            isDateOverlap(filterCheckIn, filterCheckOut, b.checkIn, b.checkOut)
+        );
+        return {
+          ...room,
+          isAvailable: room.status === 'active' && !overlappingBooking,
+          conflictBooking: overlappingBooking || null,
+        };
+      })
+      .sort(sortRoomsByNumber);
   }, [rooms, bookings, filterCheckIn, filterCheckOut, editingBookingId]);
 
   const availableRoomsForSelectedDates = useMemo(
@@ -1303,7 +1318,6 @@ export default function App() {
         prev.map((b) => (b.id === editingBookingId ? updatedBooking : b))
       );
 
-      // บันทึกแก้ไขการจองลง Firestore
       if (db) {
         setDoc(doc(db, 'bookings', editingBookingId), updatedBooking, {
           merge: true,
@@ -1344,7 +1358,6 @@ export default function App() {
 
       setBookings((prev) => [...newBookingsCreated, ...prev]);
 
-      // บันทึกการจองใหม่ลง Firestore โดยใช้ Document ID เดียวกับ booking.id
       if (db) {
         newBookingsCreated.forEach((booking) => {
           setDoc(doc(db, 'bookings', booking.id), {
@@ -1382,7 +1395,6 @@ export default function App() {
       })
     );
 
-    // อัปเดตสถานะชำระเงินลง Firestore
     if (db) {
       bookingsToMark.forEach((b) => {
         const fin = getBookingFinancials(b);
@@ -1400,14 +1412,27 @@ export default function App() {
     setSelectedBookingIdsForCombine([]);
   };
 
+  // ยกเลิกการจองและลบข้อมูลออกจาก Firestore อย่างหมดจด
   const handleCancelBooking = (bookingId: string) => {
     setBookings((prev) => prev.filter((b) => b.id !== bookingId));
 
-    // ลบหรือปรับสถานะการจองใน Firestore
-    if (db) {
-      deleteDoc(doc(db, 'bookings', bookingId)).catch((err) =>
-        console.error('Error deleting booking:', err)
-      );
+    if (db && bookingId) {
+      (async () => {
+        try {
+          await deleteDoc(doc(db, 'bookings', bookingId));
+
+          const q = query(
+            collection(db, 'bookings'),
+            where('id', '==', bookingId)
+          );
+          const querySnapshot = await getDocs(q);
+          querySnapshot.forEach(async (docSnap) => {
+            await deleteDoc(doc(db, 'bookings', docSnap.id));
+          });
+        } catch (err) {
+          console.error('Error deleting booking:', err);
+        }
+      })();
     }
 
     showToast('ยกเลิกและคืนสถานะห้องว่างเรียบร้อยแล้ว', 'info');
@@ -1455,21 +1480,23 @@ export default function App() {
   }, [bookings, reportDateRange, reportSearch, rooms]);
 
   const availableRoomsInReportPeriod = useMemo(() => {
-    return rooms.filter((r) => {
-      if (r.status !== 'active') return false;
-      const hasBooking = bookings.some(
-        (b) =>
-          b.status !== 'cancelled' &&
-          b.roomId === r.id &&
-          isDateOverlap(
-            reportDateRange.startStr,
-            reportDateRange.endStr,
-            b.checkIn,
-            b.checkOut
-          )
-      );
-      return !hasBooking;
-    });
+    return rooms
+      .filter((r) => {
+        if (r.status !== 'active') return false;
+        const hasBooking = bookings.some(
+          (b) =>
+            b.status !== 'cancelled' &&
+            b.roomId === r.id &&
+            isDateOverlap(
+              reportDateRange.startStr,
+              reportDateRange.endStr,
+              b.checkIn,
+              b.checkOut
+            )
+        );
+        return !hasBooking;
+      })
+      .sort(sortRoomsByNumber);
   }, [rooms, bookings, reportDateRange]);
 
   const openAddRoomModal = () => {
@@ -1525,10 +1552,9 @@ export default function App() {
       };
 
       setRooms((prev) =>
-        prev.map((r) => (r.id === editingRoom.id ? updatedRoom : r))
+        prev.map((r) => (r.id === editingRoom.id ? updatedRoom : r)).sort(sortRoomsByNumber)
       );
 
-      // อัปเดตห้องพักลง Firestore
       if (db && editingRoom?.id) {
         setDoc(doc(db, 'rooms', editingRoom.id), updatedRoom, {
           merge: true,
@@ -1548,9 +1574,8 @@ export default function App() {
         status: roomForm.status,
       };
 
-      setRooms((prev) => [...prev, newRoom]);
+      setRooms((prev) => [...prev, newRoom].sort(sortRoomsByNumber));
 
-      // เพิ่มห้องพักใหม่ลง Firestore
       if (db) {
         setDoc(doc(db, 'rooms', newRoom.id), newRoom).catch((err) =>
           console.error('Error creating room:', err)
@@ -1565,7 +1590,6 @@ export default function App() {
   const handleDeleteRoom = (roomId: string) => {
     setRooms((prev) => prev.filter((r) => r.id !== roomId));
 
-    // ลบห้องพักออกจาก Firestore
     if (db && roomId) {
       deleteDoc(doc(db, 'rooms', roomId)).catch((err) =>
         console.error('Error deleting room:', err)
@@ -1576,7 +1600,6 @@ export default function App() {
   };
 
   const handleSaveSettings = () => {
-    // บันทึกการตั้งค่า PromptPay และข้อมูลที่พักลง Firestore
     if (db) {
       setDoc(doc(db, 'settings', 'general'), settings, { merge: true })
         .then(() => {
@@ -1598,7 +1621,8 @@ export default function App() {
   );
 
   const buildSystemKnowledgePrompt = () => {
-    const roomSummary = rooms
+    const sortedRooms = [...rooms].sort(sortRoomsByNumber);
+    const roomSummary = sortedRooms
       .map(
         (r) =>
           `- ห้อง ${r.number} (${r.name}, ประเภท ${r.type}): ราคา ${
@@ -1653,7 +1677,7 @@ ${activeBookingsSummary}
           )
       );
       return !conflict;
-    });
+    }).sort(sortRoomsByNumber);
 
     const availText =
       availRoomsForLead.length > 0
@@ -1818,7 +1842,7 @@ ${chatTranscript}
             b.roomId === r.id &&
             isDateOverlap(checkIn, checkOut, b.checkIn, b.checkOut)
         )
-    );
+    ).sort(sortRoomsByNumber);
 
     const newMessages: any[] = [
       {
@@ -2916,7 +2940,7 @@ ${chatTranscript}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {rooms.map((room) => (
+              {[...rooms].sort(sortRoomsByNumber).map((room) => (
                 <div
                   key={room.id}
                   className="bg-white rounded-3xl p-4 shadow-sm border border-slate-200 flex flex-col justify-between"
