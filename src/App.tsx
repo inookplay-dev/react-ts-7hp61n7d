@@ -3251,7 +3251,7 @@ ${chatTranscript}
                     onChange={(e) =>
                       setBookingForm((prev) => ({
                         ...prev,
-                        depositPaid: e.target.value,
+                        depositPaid: Number(e.target.value) || 0,
                       }))
                     }
                     className="w-full bg-white border border-emerald-300 rounded-xl px-3 py-2 text-base font-extrabold text-emerald-700"
