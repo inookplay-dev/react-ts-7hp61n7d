@@ -3191,10 +3191,10 @@ ${chatTranscript}
                     min="0"
                     step="50"
                     value={bookingForm.extraBedPrice}
-                    onChange={(e) =>
+                    oonChange={(e) =>
                       setBookingForm((prev) => ({
                         ...prev,
-                        extraBedPrice: e.target.value,
+                        extraBedPrice: Number(e.target.value) || 0,
                       }))
                     }
                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-emerald-700"
