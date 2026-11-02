@@ -3191,7 +3191,7 @@ ${chatTranscript}
                     min="0"
                     step="50"
                     value={bookingForm.extraBedPrice}
-                    oonChange={(e) =>
+                    onChange={(e) =>
                       setBookingForm((prev) => ({
                         ...prev,
                         extraBedPrice: Number(e.target.value) || 0,
