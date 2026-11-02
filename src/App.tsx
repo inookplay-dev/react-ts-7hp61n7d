@@ -62,7 +62,7 @@ import {
   getDocs,
 } from 'firebase/firestore';
 
-// ฟังก์ชันดึงเฉพาะตัวเลขมาเรียงลำดับจากน้อยไปมากอย่างแม่นยำ
+// ฟังก์ชันเรียงลำดับห้องตามตัวเลขล้วน 101, 102, 103, 104...
 function sortRoomsByNumber(a: any, b: any) {
   const numA = parseInt(String(a.number || '').replace(/\D/g, ''), 10) || 0;
   const numB = parseInt(String(b.number || '').replace(/\D/g, ''), 10) || 0;
@@ -758,53 +758,6 @@ const INITIAL_MESSENGER_LEADS = [
       },
     ],
   },
-  {
-    id: 'MSG-102',
-    fbName: 'Chatchai K. (คุณฉัตรชัย)',
-    avatarBg: 'bg-blue-600',
-    phone: '0891112233',
-    status: 'new_inquiry',
-    interestedCheckIn: getTodayStr(0),
-    interestedCheckOut: getTodayStr(1),
-    interestedRoomType: 'Deluxe',
-    lastActive: '5 นาทีที่แล้ว',
-    unreadCount: 2,
-    messages: [
-      {
-        sender: 'customer',
-        text: `คืนนี้ (${getTodayStr(
-          0
-        )}) มีห้องว่างสำหรับ 2 ท่านไหมครับ? อยากทราบราคาและขอเสริมเตียง 1 เตียงครับ`,
-        time: '11:02',
-      },
-    ],
-  },
-  {
-    id: 'MSG-103',
-    fbName: 'คุณพลอยใส พาเพลิน',
-    avatarBg: 'bg-purple-600',
-    phone: '0829998877',
-    status: 'follow_up',
-    interestedCheckIn: getTodayStr(2),
-    interestedCheckOut: getTodayStr(4),
-    interestedRoomType: 'Family',
-    lastActive: '3 ชั่วโมงที่แล้ว',
-    unreadCount: 0,
-    messages: [
-      {
-        sender: 'customer',
-        text: `สอบถามห้องพักครอบครัว 5-6 คน ช่วงวันที่ ${getTodayStr(
-          2
-        )} ถึง ${getTodayStr(4)} ค่ะ นำน้องหมาพันธุ์เล็กเข้าพักได้ไหมคะ?`,
-        time: '08:30',
-      },
-      {
-        sender: 'page',
-        text: 'สวัสดีค่ะ ห้อง Family Panorama (3,200 บาท/คืน) พักได้สูงสุด 6 ท่าน ว่างอยู่ค่ะ สำหรับสัตว์เลี้ยงทางเราอนุญาตเฉพาะโซน Villa เท่านั้นนะคะ',
-        time: '08:32',
-      },
-    ],
-  },
 ];
 
 // ==========================================
@@ -907,10 +860,18 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  // ดึงและซิงค์ข้อมูล Realtime จาก Firestore พร้อมจัดเรียงตามหมายเลขห้อง
+  // State สำหรับแชทเพจ Facebook Messenger (ซิงค์กับ Firestore)
+  const [messengerLeads, setMessengerLeads] = useState<any[]>([]);
+  const [activeLeadId, setActiveLeadId] = useState('MSG-101');
+  const [leadFilterStatus, setLeadFilterStatus] = useState('all');
+  const [pageReplyInput, setPageReplyInput] = useState('');
+  const [isAiGeneratingReply, setIsAiGeneratingReply] = useState(false);
+
+  // ดึงและซิงค์ข้อมูล Realtime จาก Firestore (rooms, bookings, settings, messenger_leads)
   useEffect(() => {
     if (!db) return;
 
+    // 1. ซิงค์ห้องพัก
     const unsubRooms = onSnapshot(collection(db, 'rooms'), (snapshot) => {
       if (!snapshot.empty) {
         const roomList = snapshot.docs
@@ -920,6 +881,7 @@ export default function App() {
       }
     });
 
+    // 2. ซิงค์การจอง
     const unsubBookings = onSnapshot(collection(db, 'bookings'), (snapshot) => {
       const bookingList = snapshot.docs.map((d) => ({
         _docId: d.id,
@@ -929,6 +891,7 @@ export default function App() {
       setBookings(bookingList);
     });
 
+    // 3. ซิงค์การตั้งค่า
     const unsubSettings = onSnapshot(
       doc(db, 'settings', 'general'),
       (docSnap) => {
@@ -938,10 +901,25 @@ export default function App() {
       }
     );
 
+    // 4. ซิงค์แชทลูกค้า (messenger_leads)
+    const unsubChats = onSnapshot(collection(db, 'messenger_leads'), (snapshot) => {
+      if (!snapshot.empty) {
+        const leadsList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setMessengerLeads(leadsList);
+        if (!activeLeadId && leadsList.length > 0) {
+          setActiveLeadId(leadsList[0].id);
+        }
+      } else {
+        // หากใน Firestore ยังว่างเปล่า ให้ใช้ค่าเริ่มต้น
+        setMessengerLeads(INITIAL_MESSENGER_LEADS);
+      }
+    });
+
     return () => {
       unsubRooms();
       unsubBookings();
       unsubSettings();
+      unsubChats();
     };
   }, []);
 
@@ -987,13 +965,6 @@ export default function App() {
 
   const [quickPromptPayOpen, setQuickPromptPayOpen] = useState(false);
 
-  const [messengerLeads, setMessengerLeads] = useState<any[]>(
-    INITIAL_MESSENGER_LEADS
-  );
-  const [activeLeadId, setActiveLeadId] = useState('MSG-101');
-  const [leadFilterStatus, setLeadFilterStatus] = useState('all');
-  const [pageReplyInput, setPageReplyInput] = useState('');
-  const [isAiGeneratingReply, setIsAiGeneratingReply] = useState(false);
   const [fbConfig, setFbConfig] = useState({
     isConnected: true,
     pageName: 'เดอะ กรีนเนอรี่ รีสอร์ท - จองห้องพัก',
@@ -1412,7 +1383,6 @@ export default function App() {
     setSelectedBookingIdsForCombine([]);
   };
 
-  // ยกเลิกการจองและลบข้อมูลออกจาก Firestore อย่างหมดจด
   const handleCancelBooking = (bookingId: string) => {
     setBookings((prev) => prev.filter((b) => b.id !== bookingId));
 
@@ -1686,7 +1656,7 @@ ${activeBookingsSummary}
             .join(', ')
         : 'ไม่มีห้องว่างในช่วงดังกล่าว';
 
-    const chatTranscript = lead.messages
+    const chatTranscript = (lead.messages || [])
       .map((m: any) => `${m.sender === 'customer' ? 'ลูกค้า' : 'เพจ'}: ${m.text}`)
       .join('\n');
 
@@ -1725,33 +1695,39 @@ ${chatTranscript}
     );
   };
 
+  // ส่งข้อความตอบกลับและบันทึกลง Firestore (messenger_leads) ทันที
   const handleSendMessengerMessage = (customText: string | null = null) => {
     const textToSend = (customText ?? pageReplyInput).trim();
     if (!textToSend || !activeLead) return;
 
     const nowTime = new Date().toTimeString().slice(0, 5);
+    const updatedLead = {
+      ...activeLead,
+      unreadCount: 0,
+      lastActive: 'เมื่อสักครู่',
+      status: activeLead.status === 'new_inquiry' ? 'ai_replying' : activeLead.status,
+      messages: [
+        ...(activeLead.messages || []),
+        {
+          sender: 'page',
+          text: textToSend,
+          time: nowTime,
+        },
+      ],
+    };
+
     setMessengerLeads((prev) =>
-      prev.map((l) =>
-        l.id === activeLead.id
-          ? {
-              ...l,
-              unreadCount: 0,
-              lastActive: 'เมื่อสักครู่',
-              status: l.status === 'new_inquiry' ? 'ai_replying' : l.status,
-              messages: [
-                ...l.messages,
-                {
-                  sender: 'page',
-                  text: textToSend,
-                  time: nowTime,
-                },
-              ],
-            }
-          : l
-      )
+      prev.map((l) => (l.id === activeLead.id ? updatedLead : l))
     );
+
+    // เซฟลง Firestore Collection messenger_leads
+    if (db) {
+      setDoc(doc(db, 'messenger_leads', activeLead.id), updatedLead, { merge: true })
+        .catch((err) => console.error("Error saving chat:", err));
+    }
+
     if (!customText) setPageReplyInput('');
-    showToast('ส่งข้อความเข้าแชท Facebook Messenger ของลูกค้าแล้ว');
+    showToast('ส่งข้อความและบันทึกประวัติแชทลงฐานข้อมูลแล้ว');
   };
 
   const handleBatchAiFollowUpAllLeads = async () => {
@@ -1769,55 +1745,61 @@ ${chatTranscript}
     setIsAiGeneratingReply(true);
     const nowTime = new Date().toTimeString().slice(0, 5);
 
-    setMessengerLeads((prev) =>
-      prev.map((lead) => {
-        if (
-          lead.status === 'waiting_deposit' ||
-          lead.status === 'follow_up' ||
-          lead.status === 'new_inquiry'
-        ) {
-          const autoMsg =
-            lead.status === 'waiting_deposit'
-              ? `สวัสดีค่ะคุณ ${
-                  lead.fbName
-                } แอดมินขออนุญาตอัปเดตนะคะ สำหรับห้องพักช่วงวันที่ ${formatThaiDate(
-                  lead.interestedCheckIn
-                )} - ${formatThaiDate(
-                  lead.interestedCheckOut
-                )} ตอนนี้ยังว่างอยู่ 1 ห้องสุดท้ายค่ะ หากคุณลูกค้าสะดวกโอนมัดจำแล้วสามารถส่งสลิปในแชทนี้เพื่อให้ระบบล็อกห้องพักให้ทันทีเลยนะคะ 🙏💚`
-              : `สวัสดีค่ะคุณ ${
-                  lead.fbName
-                } ไม่ทราบว่ายังสนใจเข้าพักช่วงวันที่ ${formatThaiDate(
-                  lead.interestedCheckIn
-                )} อยู่ไหมคะ ตอนนี้ห้องโซน ${
-                  lead.interestedRoomType
-                } ยังว่างพร้อมรับรองค่ะ สอบถามเพิ่มเติมหรือให้แอดมินส่ง QR Code มัดจำให้ได้เลยนะคะ ✨`;
+    const updatedList = messengerLeads.map((lead) => {
+      if (
+        lead.status === 'waiting_deposit' ||
+        lead.status === 'follow_up' ||
+        lead.status === 'new_inquiry'
+      ) {
+        const autoMsg =
+          lead.status === 'waiting_deposit'
+            ? `สวัสดีค่ะคุณ ${
+                lead.fbName
+              } แอดมินขออนุญาตอัปเดตนะคะ สำหรับห้องพักช่วงวันที่ ${formatThaiDate(
+                lead.interestedCheckIn
+              )} - ${formatThaiDate(
+                lead.interestedCheckOut
+              )} ตอนนี้ยังว่างอยู่ 1 ห้องสุดท้ายค่ะ หากคุณลูกค้าสะดวกโอนมัดจำแล้วสามารถส่งสลิปในแชทนี้เพื่อให้ระบบล็อกห้องพักให้ทันทีเลยนะคะ 🙏💚`
+            : `สวัสดีค่ะคุณ ${
+                lead.fbName
+              } ไม่ทราบว่ายังสนใจเข้าพักช่วงวันที่ ${formatThaiDate(
+                lead.interestedCheckIn
+              )} อยู่ไหมคะ ตอนนี้ห้องโซน ${
+                lead.interestedRoomType
+              } ยังว่างพร้อมรับรองค่ะ สอบถามเพิ่มเติมหรือให้แอดมินส่ง QR Code มัดจำให้ได้เลยนะคะ ✨`;
 
-          return {
-            ...lead,
-            lastActive: 'AI ติดตามผลเมื่อสักครู่',
-            unreadCount: 0,
-            messages: [
-              ...lead.messages,
-              {
-                sender: 'page',
-                text: autoMsg,
-                time: nowTime,
-                isAiAuto: true,
-              },
-            ],
-          };
+        const newL = {
+          ...lead,
+          lastActive: 'AI ติดตามผลเมื่อสักครู่',
+          unreadCount: 0,
+          messages: [
+            ...(lead.messages || []),
+            {
+              sender: 'page',
+              text: autoMsg,
+              time: nowTime,
+              isAiAuto: true,
+            },
+          ],
+        };
+
+        if (db) {
+          setDoc(doc(db, 'messenger_leads', lead.id), newL, { merge: true })
+            .catch((err) => console.error(err));
         }
-        return lead;
-      })
-    );
+        return newL;
+      }
+      return lead;
+    });
 
+    setMessengerLeads(updatedList);
     setIsAiGeneratingReply(false);
     showToast(
-      `AI ส่งข้อความติดตามลูกค้าอัตโนมัติครบทั้ง ${pendingLeads.length} รายแล้ว!`
+      `AI ส่งข้อความติดตามลูกค้าและอัปเดตลงฐานข้อมูลครบทั้ง ${pendingLeads.length} รายแล้ว!`
     );
   };
 
+  // จำลองลูกค้าใหม่และบันทึกลง Firestore (messenger_leads)
   const handleSimulateNewCustomerInquiry = async () => {
     const sampleNames = [
       'คุณกานดา น่ารัก (Kanda)',
@@ -1887,9 +1869,16 @@ ${chatTranscript}
 
     setMessengerLeads((prev) => [createdLead, ...prev]);
     setActiveLeadId(newLeadId);
+
+    // เซฟลูกค้าใหม่ลง Firestore ทันที
+    if (db) {
+      setDoc(doc(db, 'messenger_leads', newLeadId), createdLead)
+        .catch((err) => console.error("Error saving lead:", err));
+    }
+
     showToast(
       fbConfig.autoPilot
-        ? 'มีลูกค้าทักเพจใหม่! AI Auto-Pilot ตรวจเช็คห้องว่างและตอบกลับให้อัตโนมัติแล้ว'
+        ? 'มีลูกค้าทักเพจใหม่! AI ตอบกลับและบันทึกลง Database ให้แล้ว'
         : 'มีลูกค้าทักเพจเข้ามาใหม่!'
     );
   };
@@ -1925,9 +1914,15 @@ ${chatTranscript}
       return;
     }
 
+    const updated = { ...lead, status: 'confirmed' };
     setMessengerLeads((prev) =>
-      prev.map((l) => (l.id === lead.id ? { ...l, status: 'confirmed' } : l))
+      prev.map((l) => (l.id === lead.id ? updated : l))
     );
+
+    if (db) {
+      updateDoc(doc(db, 'messenger_leads', lead.id), { status: 'confirmed' })
+        .catch((err) => console.error(err));
+    }
 
     openNewBookingModal([matchingAvailRoom.id], {
       guestName: lead.fbName,
@@ -2775,7 +2770,7 @@ ${chatTranscript}
                             <div
                               className={`w-10 h-10 rounded-full ${lead.avatarBg} text-white font-bold flex items-center justify-center shrink-0 text-sm`}
                             >
-                              {lead.fbName.charAt(0)}
+                              {lead.fbName ? lead.fbName.charAt(0) : 'U'}
                             </div>
                             <div className="min-w-0">
                               <div className="font-bold text-slate-800 text-sm truncate">
@@ -2801,7 +2796,9 @@ ${chatTranscript}
                         </div>
 
                         <p className="text-xs text-slate-600 truncate mt-2">
-                          {lead.messages[lead.messages.length - 1]?.text}
+                          {lead.messages && lead.messages.length > 0
+                            ? lead.messages[lead.messages.length - 1]?.text
+                            : '-'}
                         </p>
                       </div>
                     );
@@ -2839,7 +2836,7 @@ ${chatTranscript}
                   </div>
 
                   <div className="p-4 space-y-3 max-h-80 overflow-y-auto bg-slate-50/50">
-                    {activeLead.messages.map((msg: any, idx: number) => (
+                    {(activeLead.messages || []).map((msg: any, idx: number) => (
                       <div
                         key={idx}
                         className={`flex flex-col ${
