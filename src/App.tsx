@@ -3458,7 +3458,7 @@ ${chatTranscript}
                     min="0"
                     value={roomForm.price}
                     onChange={(e) =>
-                      setRoomForm((p) => ({ ...p, price: e.target.value }))
+                      setRoomForm((p) => ({ ...p, price: Number(e.target.value) || 0 }))
                     }
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-emerald-700"
                   />
@@ -3472,7 +3472,7 @@ ${chatTranscript}
                     min="1"
                     value={roomForm.capacity}
                     onChange={(e) =>
-                      setRoomForm((p) => ({ ...p, capacity: e.target.value }))
+                      setRoomForm((p) => ({ ...p, capacity: Number(e.target.value) || 0 }))
                     }
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm"
                   />
