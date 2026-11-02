@@ -48,6 +48,10 @@ import {
   Sliders,
 } from 'lucide-react';
 
+import { db } from './firebase';
+import { collection, onSnapshot, doc, setDoc, addDoc } from 'firebase/firestore';
+
+
 // ==========================================
 // 1. มาตรฐานการคำนวณ EMVCo PromptPay QR Code (ประเทศไทย)
 // ==========================================
@@ -886,7 +890,31 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
   };
+// ภายใน App component:
+useEffect(() => {
+  if (!db) return;
 
+  // 1. ดึงและซิงค์ข้อมูลห้องพัก
+  const unsubRooms = onSnapshot(collection(db, 'rooms'), (snapshot) => {
+    if (!snapshot.empty) {
+      const roomList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setRooms(roomList as any);
+    }
+  });
+
+  // 2. ดึงและซิงค์ข้อมูลการจอง
+  const unsubBookings = onSnapshot(collection(db, 'bookings'), (snapshot) => {
+    if (!snapshot.empty) {
+      const bookingList = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setBookings(bookingList as any);
+    }
+  });
+
+  return () => {
+    unsubRooms();
+    unsubBookings();
+  };
+}, []);
   // ==========================================
   // State สำหรับระบบจองห้องพัก (Booking Tab)
   // ==========================================
@@ -1317,6 +1345,18 @@ export default function App() {
       });
 
       setBookings((prev) => [...newBookingsCreated, ...prev]);
+      try {
+      if (db) {
+        for (const booking of newBookingsCreated) {
+          await addDoc(collection(db, 'bookings'), {
+            ...booking,
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error saving booking:", error);
+    }
       setSelectedRoomIdsForBooking([]);
       setBookingModalOpen(false);
       showToast(`ยืนยันการจองสำเร็จ ${newBookingsCreated.length} ห้อง!`);
