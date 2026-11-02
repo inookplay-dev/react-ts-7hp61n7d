@@ -823,7 +823,7 @@ function getNightCount(checkIn, checkOut) {
   if (!checkIn || !checkOut) return 1;
   const start = new Date(checkIn);
   const end = new Date(checkOut);
-  const diff = Math.round((end - start) / (1000 * 60 * 60 * 24));
+  const diff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   return diff > 0 ? diff : 1;
 }
 
