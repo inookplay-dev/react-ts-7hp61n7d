@@ -1521,6 +1521,18 @@ useEffect(() => {
             : r
         )
       );
+      if (db && editingRoom?.id) {
+        setDoc(doc(db, 'rooms', editingRoom.id), {
+          ...editingRoom,
+          number: roomForm.number.trim(),
+          name: roomForm.name.trim(),
+          type: roomForm.type,
+          price: Number(roomForm.price) || 0,
+          capacity: Number(roomForm.capacity) || 2,
+          amenities: amenitiesArr,
+          status: roomForm.status,
+        }, { merge: true }).catch((err) => console.error("Error updating room:", err));
+      }
       showToast(`อัปเดตข้อมูลห้อง ${roomForm.number} เรียบร้อยแล้ว`);
     } else {
       const newRoom = {
@@ -1534,6 +1546,10 @@ useEffect(() => {
         status: roomForm.status,
       };
       setRooms((prev) => [...prev, newRoom]);
+      if (db) {
+        setDoc(doc(db, 'rooms', newRoom.id), newRoom)
+          .catch((err) => console.error("Error creating room:", err));
+      }
       showToast(`เพิ่มห้องพัก ${newRoom.number} สำเร็จ!`);
     }
     setRoomModalOpen(false);
