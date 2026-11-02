@@ -1345,18 +1345,20 @@ useEffect(() => {
       });
 
       setBookings((prev) => [...newBookingsCreated, ...prev]);
+      (async () => {
       try {
-      if (db) {
-        for (const booking of newBookingsCreated) {
-          await addDoc(collection(db, 'bookings'), {
-            ...booking,
-            createdAt: new Date().toISOString()
-          });
+        if (db) {
+          for (const booking of newBookingsCreated) {
+            await addDoc(collection(db, 'bookings'), {
+              ...booking,
+              createdAt: new Date().toISOString()
+            });
+          }
         }
+      } catch (error) {
+        console.error("Error saving booking:", error);
       }
-    } catch (error) {
-      console.error("Error saving booking:", error);
-    }
+    })();
       setSelectedRoomIdsForBooking([]);
       setBookingModalOpen(false);
       showToast(`ยืนยันการจองสำเร็จ ${newBookingsCreated.length} ห้อง!`);
