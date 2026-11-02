@@ -1755,7 +1755,6 @@ ${chatTranscript}
           settings.promptPayId
         } เพื่อล็อกห้องพักได้ทันทีค่ะ รับห้องไหนดีคะ?`,
         time: nowTime,
-        isAiAuto: true,
       });
     }
 
