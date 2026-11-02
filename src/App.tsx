@@ -418,7 +418,7 @@ async function renderBookingSlipToCanvas({
     img.crossOrigin = 'anonymous';
     const timeout = setTimeout(() => {
       drawDeterministicMatrixFallback(ctx, qrX, qrY, qrBoxSize, payload);
-      resolve();
+      resolve(null as any);
     }, 2500);
 
     img.onload = () => {
@@ -426,12 +426,12 @@ async function renderBookingSlipToCanvas({
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(qrX - 6, qrY - 6, qrBoxSize + 12, qrBoxSize + 12);
       ctx.drawImage(img, qrX, qrY, qrBoxSize, qrBoxSize);
-      resolve();
+      resolve(null as any);
     };
     img.onerror = () => {
       clearTimeout(timeout);
       drawDeterministicMatrixFallback(ctx, qrX, qrY, qrBoxSize, payload);
-      resolve();
+      resolve(null as any);
     };
     img.src = qrUrl;
   });
